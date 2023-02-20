@@ -66,7 +66,6 @@ export function getAttributeCompletionProvider() {
         let nearestOpenItem = nearestOpen(document, position)
         let itemsOnLine = getItemsOnLineCount(triggerText)
         const nsPrefix = getXsdNsPrefix(document, position)
-        let preVal = ''
         let additionalItems = getDefinedTypes(document, nsPrefix)
 
         if (
@@ -74,148 +73,22 @@ export function getAttributeCompletionProvider() {
           !triggerText.includes('assert') &&
           !nearestOpenItem.includes('none')
         ) {
-          if (
+          let preVal =
             !triggerText.includes('<' + nsPrefix + nearestOpenItem) &&
             lineCount(document, position, nearestOpenItem) === 1 &&
             itemsOnLine < 2
-          ) {
-            preVal = '\t'
-          } else {
-            preVal = ''
-          }
+              ? '\t'
+              : ''
 
-          if (nearestOpenItem.includes('element')) {
-            if (
-              (triggerText.includes('<' + nsPrefix + 'element') &&
-                triggerText.includes('name=')) ||
-              (triggerText.includes('<' + nsPrefix + 'element ') &&
-                triggerText.includes('ref='))
-            ) {
-              return getCompletionItems(
-                [
-                  'dfdl:defineFormat',
-                  'dfdl:defineEscapeScheme',
-                  'type=',
-                  'minOccurs=',
-                  'maxOccurs=',
-                  'dfdl:occursCount=',
-                  'dfdl:byteOrder=',
-                  'dfdl:occursCountKind=',
-                  'dfdl:length=',
-                  'dfdl:lengthKind=',
-                  'dfdl:encoding=',
-                  'dfdl:alignment=',
-                  'dfdl:lengthUnits=',
-                  'dfdl:lengthPattern=',
-                  'dfdl:inputValueCalc=',
-                  'dfdl:outputValueCalc=',
-                  'dfdl:alignmentUnits=',
-                  'dfdl:terminator=',
-                  'dfdl:outputNewLine=',
-                  'dfdl:choiceBranchKey=',
-                  'dfdl:representation',
-                ],
-                preVal,
-                additionalItems,
-                nsPrefix
-              )
-            }
-          }
-
-          if (nearestOpenItem.includes('sequence')) {
-            return getCompletionItems(
-              [
-                'dfdl:hiddenGroupRef=',
-                'dfdl:sequenceKind=',
-                'dfdl:separator=',
-                'dfdl:separatorPosition=',
-                'dfdl:separatorSuppressionPolicy',
-              ],
-              preVal,
-              undefined,
-              nsPrefix
-            )
-          }
-
-          /*if (nearestOpenItem.includes('group ref')
-          ) {
-            return getCompletionItems(
-              [
-                'sequence',
-              ],
-              undefined,
-              undefined,
-              nsPrefix
-              )
-          }*/
-
-          if (nearestOpenItem.includes('choice')) {
-            return getCompletionItems(
-              [
-                'dfdl:choiceLengthKind=',
-                'dfdl:choiceLength=',
-                'dfdl:initiatedContent=',
-                'dfdl:choiceDispatchKey=',
-                'dfdl:choiceBranchKey=',
-              ],
-              undefined,
-              undefined,
-              nsPrefix
-            )
-          }
-
-          if (nearestOpenItem.includes('simpleType')) {
-            return getCompletionItems(
-              [
-                'dfdl:length=',
-                'dfdl:lengthKind=',
-                'dfdl:simpleType',
-                'dfdl:simpleType',
-                nsPrefix + 'restriction',
-              ],
-              undefined,
-              undefined,
-              nsPrefix
-            )
-          }
-
-          if (nearestOpenItem.includes('defineVariable')) {
-            let xmlItems = [
-              {
-                item: 'external=',
-                snippetString: preVal + 'external="${1|true,false|}"$0',
-              },
-              {
-                item: 'defaultValue=',
-                snippetString: preVal + 'defaultValue="0$1"$0',
-              },
-            ]
-
-            let compItems: vscode.CompletionItem[] = []
-            xmlItems.forEach((e) => {
-              const completionItem = new vscode.CompletionItem(e.item)
-              completionItem.insertText = new vscode.SnippetString(
-                e.snippetString
-              )
-
-              compItems.push(completionItem)
-            })
-
-            getCommonItems(['type='], '', additionalItems, nsPrefix).forEach(
-              (ci) => {
-                compItems.push(ci)
-              }
-            )
-
-            return compItems
-          }
-
-          if (nearestOpenItem.includes('setVariable')) {
-            const xmlValue = new vscode.CompletionItem('value=')
-            xmlValue.insertText = new vscode.SnippetString('value="$1"$0')
-            xmlValue.documentation = new vscode.MarkdownString('')
-          }
+          return checkNearestOpenItem(
+            nearestOpenItem,
+            triggerText,
+            nsPrefix,
+            preVal,
+            additionalItems
+          )
         }
+
         return undefined
       },
     },
@@ -233,6 +106,7 @@ function getDefinedTypes(document: vscode.TextDocument, nsPrefix: string) {
     const triggerText = document
       .lineAt(lineNum)
       .text.substring(0, document.lineAt(lineNum).range.end.character)
+
     if (
       triggerText.includes(nsPrefix + 'simpleType Name=') ||
       triggerText.includes(nsPrefix + 'complexType Name=')
@@ -240,9 +114,147 @@ function getDefinedTypes(document: vscode.TextDocument, nsPrefix: string) {
       let startPos = triggerText.indexOf('"', 0)
       let endPos = triggerText.indexOf('"', startPos + 1)
       let newType = triggerText.substring(startPos + 1, endPos)
+
       additionalTypes = String(additionalTypes + ',' + newType)
     }
+
     ++lineNum
   }
+
   return additionalTypes
+}
+
+function checkNearestOpenItem(
+  nearestOpenItem: string,
+  triggerText: string,
+  nsPrefix: string,
+  preVal: string,
+  additionalItems: string
+): vscode.CompletionItem[] | undefined {
+  switch (nearestOpenItem) {
+    case 'element':
+      return getElementCompletionItems(
+        triggerText,
+        preVal,
+        additionalItems,
+        nsPrefix
+      )
+    case 'sequence':
+      return getCompletionItems(
+        [
+          'dfdl:hiddenGroupRef=',
+          'dfdl:sequenceKind=',
+          'dfdl:separator=',
+          'dfdl:separatorPosition=',
+          'dfdl:separatorSuppressionPolicy',
+        ],
+        preVal,
+        undefined,
+        nsPrefix
+      )
+    case 'choice':
+      return getCompletionItems(
+        [
+          'dfdl:choiceLengthKind=',
+          'dfdl:choiceLength=',
+          'dfdl:initiatedContent=',
+          'dfdl:choiceDispatchKey=',
+          'dfdl:choiceBranchKey=',
+        ],
+        undefined,
+        undefined,
+        nsPrefix
+      )
+    case 'simpleType':
+      return getCompletionItems(
+        [
+          'dfdl:length=',
+          'dfdl:lengthKind=',
+          'dfdl:simpleType',
+          'dfdl:simpleType',
+          nsPrefix + 'restriction',
+        ],
+        undefined,
+        undefined,
+        nsPrefix
+      )
+    case 'defineVariable':
+      return getDefineVariableCompletionItems(preVal, additionalItems, nsPrefix)
+    case 'setVariable':
+      const xmlValue = new vscode.CompletionItem('value=')
+      xmlValue.insertText = new vscode.SnippetString('value="$1"$0')
+      xmlValue.documentation = new vscode.MarkdownString('')
+      return undefined
+    default:
+      return undefined
+  }
+}
+
+function getDefineVariableCompletionItems(
+  preVal: string,
+  additionalItems: string,
+  nsPrefix: string
+): vscode.CompletionItem[] {
+  let xmlItems = [
+    {
+      item: 'external=',
+      snippetString: preVal + 'external="${1|true,false|}"$0',
+    },
+    {
+      item: 'defaultValue=',
+      snippetString: preVal + 'defaultValue="0$1"$0',
+    },
+  ]
+
+  let compItems: vscode.CompletionItem[] = []
+  xmlItems.forEach((e) => {
+    const completionItem = new vscode.CompletionItem(e.item)
+    completionItem.insertText = new vscode.SnippetString(e.snippetString)
+
+    compItems.push(completionItem)
+  })
+
+  getCommonItems(['type='], '', additionalItems, nsPrefix).forEach((ci) => {
+    compItems.push(ci)
+  })
+
+  return compItems
+}
+
+function getElementCompletionItems(
+  triggerText: string,
+  preVal: string,
+  additionalItems: string,
+  nsPrefix: string
+): vscode.CompletionItem[] | undefined {
+  return triggerText.includes('name="') || triggerText.includes('ref="')
+    ? getCompletionItems(
+        [
+          'dfdl:defineFormat',
+          'dfdl:defineEscapeScheme',
+          'type=',
+          'minOccurs=',
+          'maxOccurs=',
+          'dfdl:occursCount=',
+          'dfdl:byteOrder=',
+          'dfdl:occursCountKind=',
+          'dfdl:length=',
+          'dfdl:lengthKind=',
+          'dfdl:encoding=',
+          'dfdl:alignment=',
+          'dfdl:lengthUnits=',
+          'dfdl:lengthPattern=',
+          'dfdl:inputValueCalc=',
+          'dfdl:outputValueCalc=',
+          'dfdl:alignmentUnits=',
+          'dfdl:terminator=',
+          'dfdl:outputNewLine=',
+          'dfdl:choiceBranchKey=',
+          'dfdl:representation',
+        ],
+        preVal,
+        additionalItems,
+        nsPrefix
+      )
+    : undefined
 }
