@@ -31,43 +31,21 @@ export function insertSnippet(snippetString: string, backpos: vscode.Position) {
   )
 }
 
-//Checks if the line at the current position is the last opened tag
-export function checkLastItemOpen(
-  document: vscode.TextDocument,
-  position: vscode.Position
-) {
-  var lineNum = position.line
-  const triggerText = document.lineAt(lineNum).text
-  while (triggerText.length === 0) {
-    --lineNum
-  }
-  const previousLine = document.lineAt(lineNum).text
-  return !(
-    previousLine.includes('</') ||
-    previousLine.includes('/>') ||
-    ((triggerText.includes('element') ||
-      triggerText.includes('sequence') ||
-      triggerText.includes('choice') ||
-      triggerText.includes('group') ||
-      triggerText.includes('Variable')) &&
-      (triggerText.includes('</') || triggerText.includes('/>')))
-  )
-}
-
 export function lineCount(
   document: vscode.TextDocument,
-  position: vscode.Position
+  position: vscode.Position,
+  tag: string
 ) {
-  var lineNum = position.line
-  var lineCount = 0
+  let lineNum = position.line
+  let lineCount = 0
   const nsPrefix = getXsdNsPrefix(document, position)
   while (lineNum !== 0) {
     --lineNum
     ++lineCount
     const triggerText = document.lineAt(lineNum).text
     if (
-      triggerText.includes('<' + nsPrefix + 'element') &&
-      !triggerText.includes('</' + nsPrefix + 'element') &&
+      triggerText.includes('<' + nsPrefix + tag) &&
+      !triggerText.includes('</' + nsPrefix + tag) &&
       !triggerText.includes('/>')
     ) {
       return lineCount
@@ -76,208 +54,441 @@ export function lineCount(
   return lineCount
 }
 
-export function nearestOpen(
+export function isBetweenOpenCloseTags(
   document: vscode.TextDocument,
-  position: vscode.Position
+  position: vscode.Position,
+  tag: string,
+  startLine: number
 ) {
-  var lineNum = position.line
+  let lineNum = position.line
+  let itemsOnLine = getItemsOnLineCount(document.lineAt(lineNum).text)
   const nsPrefix = getXsdNsPrefix(document, position)
-  while (lineNum !== -1) {
-    const triggerText = document.lineAt(lineNum).text
-    if (triggerText.includes('element') && !triggerText.includes('/>')) {
-      if (checkElementOpen(document, position)) {
-        return 'element'
-      }
-    } else if (
-      triggerText.includes('sequence') &&
-      !triggerText.includes('/>')
+  const triggerLine = position.line
+  const triggerPos = position.character
+  let triggerText = document.lineAt(lineNum).text
+  const textBeforeTrigger = triggerText.substring(0, triggerPos)
+  let tagPos = textBeforeTrigger.lastIndexOf('<' + nsPrefix + tag)
+  let tagEndPos = triggerText.indexOf('>', tagPos)
+  let selfClosingTagPos = triggerText.indexOf('/>', tagPos)
+  let closingTagPos = triggerText.indexOf('</' + nsPrefix + tag, tagEndPos)
+  let closingTagEndPos = triggerText.indexOf('>', closingTagPos)
+  if (closingTagPos === -1) {
+    closingTagEndPos = -1
+  }
+  if (itemsOnLine > 1 && lineNum != -1 && triggerText.includes(tag)) {
+    //if there are multiple tags on the line, and the trigger is
+    //between the open and close tags
+    if (
+      (selfClosingTagPos !== -1 && triggerPos < tagEndPos) ||
+      (triggerPos > tagEndPos && triggerPos <= closingTagPos) ||
+      (triggerPos > tagEndPos && closingTagPos === -1)
     ) {
-      if (checkSequenceOpen(document, position)) {
-        return 'sequence'
-      }
-    } else if (triggerText.includes('choice') && !triggerText.includes('/>')) {
-      if (checkChoiceOpen(document, position)) {
-        return 'choice'
-      }
-    } else if (triggerText.includes('group')) {
-      if (
-        triggerText.includes('<' + nsPrefix + 'group') &&
-        !triggerText.includes('</' + nsPrefix + 'group') &&
-        !triggerText.includes('/>') &&
-        !triggerText.includes('/')
-      ) {
-        return 'group'
-      }
-    } else if (
-      triggerText.includes('simpleType') &&
-      !triggerText.includes('/>')
-    ) {
-      if (checkSimpleTypeOpen(document, position)) {
-        return 'simpleType'
-      }
-    } else if (
-      triggerText.includes('defineVariable') &&
-      !triggerText.includes('/>')
-    ) {
-      if (checkDefineVariableOpen(document, position)) {
-        return 'defineVariable'
-      }
-    } else if (
-      triggerText.includes('setVariable') &&
-      !triggerText.includes('/>')
-    ) {
-      if (checkSetVariableOpen(document, position)) {
-        return 'setVariable'
-      }
-    } else if (triggerText.includes('/>')) {
-      return 'none'
+      return true
     }
-    --lineNum
+  } else {
+    //if triggerLine equals startLine and the triggerLine
+    // is selfClosing the tag is not btwn open and close tags
+    if (
+      triggerText.includes('/>') &&
+      triggerText.includes(tag) &&
+      startLine === triggerLine &&
+      (triggerPos <= tagPos || triggerPos >= closingTagEndPos)
+    ) {
+      return true
+    }
+    //If the the TriggerLine is a closing tag and the closing tag
+    //matches this open tag and the trigger position is before the
+    //beginnning of the close tag, the trigger is btwn open and close tags
+    let currentText = ''
+    closingTagPos = triggerText.indexOf('</' + nsPrefix + tag)
+    closingTagEndPos = triggerText.indexOf('>', closingTagPos)
+    if (closingTagPos === -1) {
+      closingTagEndPos = -1
+    }
+    if (
+      triggerText.includes('</') &&
+      triggerText.includes(tag) &&
+      startLine === triggerLine &&
+      triggerPos <= closingTagPos
+    ) {
+      return true
+    }
+    //if the opening tag is before the trigger and the closing tag
+    //is after the trigger, the trigger is btwn open and close tags
+    //don't evaluate lines with multiple tags
+    if (startLine <= triggerLine) {
+      lineNum = startLine
+      while (lineNum > -1 && lineNum < document.lineCount - 1) {
+        ++lineNum
+        currentText = document.lineAt(lineNum).text
+        itemsOnLine = getItemsOnLineCount(currentText)
+        //if there is another open tag for this item skip lines
+        //until the close tag for this item
+        if (
+          currentText.includes('<' + nsPrefix + tag) &&
+          currentText.includes('>') &&
+          !currentText.includes('/>')
+        ) {
+          //skipping to closing tag
+          while (
+            !currentText.includes('</' + nsPrefix + tag) &&
+            getItemsOnLineCount(currentText) < 2
+          ) {
+            currentText = document.lineAt(++lineNum).text
+          }
+          //skip to the next line
+          currentText = document.lineAt(++lineNum).text
+        }
+        if (currentText.includes('</' + nsPrefix + tag) && itemsOnLine < 2) {
+          closingTagPos = currentText.indexOf('</')
+          if (
+            lineNum > triggerLine ||
+            (lineNum === triggerLine && triggerPos < closingTagPos)
+          ) {
+            return true
+          }
+          return false
+        }
+      }
+    }
+  }
+  return false
+}
+
+export function checkMissingCloseTag(
+  document: vscode.TextDocument,
+  position: vscode.Position,
+  nsPrefix: string
+) {
+  const triggerLine = position.line
+  const triggerPos = position.character
+  const triggerText = document.lineAt(triggerLine).text
+  const itemsOnLine = getItemsOnLineCount(triggerText)
+  const items = [
+    'element',
+    'choice',
+    'sequence',
+    'group',
+    'simpleType',
+    'complexType',
+    'annotation',
+    'appinfo',
+    'assert',
+    'discriminator',
+    'defineVariable',
+    'setVariable',
+    'schema',
+  ]
+  //let test = ''
+  let currentLine = triggerLine
+  let currentText = triggerText
+  let lineBefore = triggerLine
+  let lineAfter = triggerLine
+  let openTagArray: number[] = []
+  let closeTagArray: number[] = []
+  let nextCloseTagPos = 0
+  for (let i = 0; i < items.length; ++i) {
+    const textBeforeTrigger = triggerText.substring(0, triggerPos)
+    if (itemsOnLine > 1) {
+      if (
+        items[i] === 'assert' ||
+        items[i] === 'discriminator' ||
+        items[i] === 'Variable'
+      ) {
+        nsPrefix = 'dfdl:'
+      }
+      if (textBeforeTrigger.lastIndexOf('<' + nsPrefix + items[i]) > -1) {
+        let nextCloseCharPos = 0
+        let nextOpenTagPos = 0
+        while (
+          (nextOpenTagPos = triggerText.indexOf(
+            '<' + nsPrefix + items[i],
+            nextOpenTagPos
+          )) > -1
+        ) {
+          openTagArray.push(nextOpenTagPos)
+          nextCloseCharPos = triggerText.indexOf('>', nextOpenTagPos)
+          //if the current tag doesn't have a closing symbol '>'
+          if (triggerText.indexOf('<', nextOpenTagPos + 1) < nextCloseCharPos) {
+            nextCloseCharPos = triggerText.indexOf('<', nextOpenTagPos + 1) - 1
+          }
+          //if tag is self closing remove it from the openTagArray
+          if (triggerText.substring(nextCloseCharPos - 1, 2) === '/>') {
+            openTagArray.splice(-1, 1)
+          }
+          nextOpenTagPos = nextOpenTagPos + 1
+        }
+        let testval = triggerText.indexOf(
+          '</' + nsPrefix + items[i],
+          nextCloseCharPos
+        )
+        while (
+          //(nextCloseTagPos = triggerText.indexOf(
+          //  '</' + nsPrefix + items[i],
+          //  nextCloseTagPos
+          //)) !== -1
+          testval !== -1
+        ) {
+          closeTagArray.push(nextCloseTagPos)
+          nextCloseTagPos = nextCloseTagPos + 1
+          testval = triggerText.indexOf(
+            '</' + nsPrefix + items[i],
+            nextCloseTagPos
+          )
+        }
+        if (openTagArray.length > closeTagArray.length) {
+          return items[i]
+        }
+      }
+    }
+    currentText = triggerText
+    currentLine = triggerLine
+    lineBefore = triggerLine
+    lineAfter = triggerLine
+    openTagArray = []
+    closeTagArray = []
+    if (itemsOnLine < 2) {
+      while (
+        currentText.indexOf('<' + nsPrefix + items[i]) === -1 &&
+        currentLine > -1
+      ) {
+        --currentLine
+        if (currentLine > -1) {
+          currentText = document.lineAt(currentLine).text
+        }
+        if (getItemsOnLineCount(currentText) > 1) {
+          --currentLine
+        }
+      }
+      if (currentText.indexOf('<' + nsPrefix + items[i]) > -1) {
+        while (lineBefore > -1) {
+          currentText = document.lineAt(lineBefore).text
+          if (getItemsOnLineCount(currentText) < 2) {
+            if (currentText.indexOf('<' + nsPrefix + items[i]) > -1) {
+              openTagArray.push(lineBefore)
+              //if selfclosing remove from the array
+              if (currentText.indexOf('/>') > -1) {
+                openTagArray.splice(openTagArray.length - 1, 1)
+              }
+            }
+            if (currentText.indexOf('</' + nsPrefix + items[i]) > -1) {
+              closeTagArray.push(lineBefore)
+            }
+          }
+          --lineBefore
+        }
+        ++lineAfter
+        while (lineAfter < document.lineCount) {
+          currentText = document.lineAt(lineAfter).text
+          if (getItemsOnLineCount(currentText) < 2) {
+            if (currentText.indexOf('<' + nsPrefix + items[i]) > -1) {
+              openTagArray.push(lineAfter)
+              //if selfclosing remove from the array
+              if (currentText.indexOf('/>') > -1) {
+                openTagArray.splice(openTagArray.length - 1, 1)
+              }
+            }
+            if (currentText.indexOf('</' + nsPrefix + items[i]) > -1) {
+              closeTagArray.push(lineAfter)
+            }
+          }
+          ++lineAfter
+        }
+        if (openTagArray.length > closeTagArray.length) {
+          return items[i]
+        }
+      }
+    }
   }
   return 'none'
 }
 
-export function checkElementOpen(
+export function nearestOpen(
   document: vscode.TextDocument,
   position: vscode.Position
 ) {
   const nsPrefix = getXsdNsPrefix(document, position)
-  var lineNum = position.line
-  while (lineNum !== -1) {
-    const triggerText = document.lineAt(lineNum).text
-    if (
-      triggerText.includes('<' + nsPrefix + 'element') &&
-      (triggerText.includes('>') ||
-        triggerText.includes('</' + nsPrefix + 'element') ||
-        triggerText.includes('/>'))
-    ) {
-      return false
+  const items = [
+    'element',
+    'sequence',
+    'choice',
+    'group',
+    'simpleType',
+    'complexType',
+    'defineVariable',
+    'setVariable',
+    'schema',
+  ]
+  for (let i = 0; i < items.length; ++i) {
+    if (checkTagOpen(document, position, nsPrefix, items[i])) {
+      return items[i]
     }
-    if (triggerText.includes('</' + nsPrefix + 'element')) {
-      return false
-    }
-    if (
-      triggerText.includes('<' + nsPrefix + 'element') &&
-      !triggerText.includes('</' + nsPrefix + 'element') &&
-      !triggerText.includes('/>') &&
-      !triggerText.includes('>')
-    ) {
-      return true
-    }
-    --lineNum
   }
-  return false
+  return 'none'
 }
 
-export function checkSequenceOpen(
+export function getCloseTag(
   document: vscode.TextDocument,
-  position: vscode.Position
-) {
-  const nsPrefix = getXsdNsPrefix(document, position)
-  var lineNum = position.line
-  while (lineNum !== 0) {
-    const triggerText = document.lineAt(lineNum).text
-    if (
-      (triggerText.includes('<' + nsPrefix + 'sequence') &&
-        (triggerText.includes('</' + nsPrefix + 'sequence') ||
-          triggerText.includes('/>'))) ||
-      triggerText.includes('</' + nsPrefix + 'sequence>')
-    ) {
-      return false
+  position: vscode.Position,
+  nsPrefix: string,
+  tag: string,
+  startLine: number,
+  startPos: number
+): [string, number, number] {
+  let triggerLine = position.line
+  let triggerPos = position.character
+  let lineNum = startLine
+  let tagOpen = startPos
+  const triggerText = document.lineAt(position.line).text
+  const itemsOnLine = getItemsOnLineCount(document.lineAt(lineNum).text)
+  //let tagPos = triggerText.indexOf('<')
+  let endPos = triggerText.lastIndexOf('>')
+  if (
+    itemsOnLine > 1 &&
+    //startPos !== tagPos &&
+    startPos < endPos
+  ) {
+    while (tagOpen > -1 && tagOpen < triggerText.length) {
+      tagOpen = triggerText.indexOf('<', tagOpen)
+      let tagClose = triggerText.indexOf('>', tagOpen)
+      let tagPart = triggerText.substring(tagOpen, tagClose)
+      if (tagPart.includes(tag) && tagPart.includes('/')) {
+        return [tag, startLine, tagOpen]
+      }
+      tagOpen = tagClose + 1
     }
+  } else {
+    let endPos = triggerText.indexOf('>', startPos)
     if (
-      triggerText.includes('<' + nsPrefix + 'sequence') &&
-      !triggerText.includes('</' + nsPrefix + 'sequence') &&
-      !triggerText.includes('/>')
+      (triggerText.includes('</') || triggerText.includes('/>')) &&
+      triggerText.includes(tag) &&
+      endPos > -1 &&
+      itemsOnLine < 2
     ) {
-      return true
+      return [tag, triggerLine, triggerPos]
     }
-    --lineNum
+    while (lineNum > -1 && lineNum < document.lineCount) {
+      let currentText = document.lineAt(lineNum).text
+      if (getItemsOnLineCount(currentText) < 2) {
+        startPos = currentText.indexOf('<')
+        if (
+          currentText.includes('<' + nsPrefix + tag) &&
+          currentText.includes('/>')
+        ) {
+          return [tag, lineNum, startPos]
+        }
+        //if there is another open tag for this item skip lines
+        //until the close tag for this item
+        if (
+          currentText.includes('<' + nsPrefix + tag) &&
+          currentText.includes('>') &&
+          !currentText.includes('/>')
+        ) {
+          //skipping to closing tag
+          while (!currentText.includes('</' + nsPrefix + tag)) {
+            currentText = document.lineAt(++lineNum).text
+            //if multiple tags on this line skip to the next line
+            if (getItemsOnLineCount(currentText)) {
+              currentText = document.lineAt(++lineNum).text
+            }
+          }
+        }
+        if (currentText.includes('</' + nsPrefix + tag)) {
+          return [tag, lineNum, startPos]
+        }
+      }
+      ++lineNum
+    }
   }
-  return false
+  return ['none', 0, 0]
 }
 
-export function checkChoiceOpen(
+export function nearestTag(
   document: vscode.TextDocument,
-  position: vscode.Position
-) {
-  const nsPrefix = getXsdNsPrefix(document, position)
-  var lineNum = position.line
-  while (lineNum !== 0) {
-    const triggerText = document.lineAt(lineNum).text
-    if (
-      (triggerText.includes('<' + nsPrefix + 'choice') &&
-        (triggerText.includes('</' + nsPrefix + 'choice') ||
-          triggerText.includes('/>'))) ||
-      triggerText.includes('</' + nsPrefix + 'choice>')
-    ) {
-      return false
+  position: vscode.Position,
+  nsPrefix: string,
+  startLine: number,
+  startPos: number
+): [string, number, number] {
+  const TriggerLine = position.line
+  let lineNum = startLine
+  const triggerText = document.lineAt(TriggerLine).text
+  const itemsOnLine = getItemsOnLineCount(document.lineAt(lineNum).text)
+  const items = [
+    'element',
+    'sequence',
+    'choice',
+    'group',
+    'simpleType',
+    'complexType',
+    'schema',
+  ]
+  let tagPos = triggerText.indexOf('<')
+  let endPos = triggerText.lastIndexOf('>')
+  if (itemsOnLine > 1 && startPos !== tagPos && startPos < endPos) {
+    let textBeforeTrigger = triggerText.substring(0, startPos)
+    let prevTagPos = 0
+    while (prevTagPos > -1) {
+      prevTagPos = textBeforeTrigger.lastIndexOf('<')
+      let tag = textBeforeTrigger.substring(prevTagPos)
+      if (
+        !textBeforeTrigger.includes('</') &&
+        !textBeforeTrigger.includes('/>')
+      ) {
+        for (let i = 0; i < items.length; ++i) {
+          if (tag.includes('<' + nsPrefix + items[i])) {
+            return [items[i], startLine, prevTagPos]
+          }
+        }
+      }
+      textBeforeTrigger = textBeforeTrigger.substring(0, prevTagPos)
     }
-    if (
-      triggerText.includes('<' + nsPrefix + 'choice') &&
-      !triggerText.includes('</' + nsPrefix + 'choice') &&
-      !triggerText.includes('/>')
-    ) {
-      return true
+  } else {
+    while (lineNum > -1 && lineNum < document.lineCount - 1) {
+      let currentText = document.lineAt(lineNum).text
+      if (getItemsOnLineCount(currentText) < 2) {
+        if (!currentText.includes('</') && !currentText.includes('/>')) {
+          for (let i = 0; i < items.length; ++i) {
+            if (currentText.includes('<' + nsPrefix + items[i])) {
+              return [items[i], lineNum, startPos]
+            }
+          }
+        }
+      }
+      --lineNum
     }
-    --lineNum
   }
-  return false
-}
-export function checkSimpleTypeOpen(
-  document: vscode.TextDocument,
-  position: vscode.Position
-) {
-  const nsPrefix = getXsdNsPrefix(document, position)
-  var lineNum = position.line
-  while (lineNum !== 0) {
-    const triggerText = document.lineAt(lineNum).text
-    if (
-      triggerText.includes('<' + nsPrefix + 'simpleType') &&
-      !triggerText.includes('</' + nsPrefix + 'simpleType') &&
-      !triggerText.includes('/>')
-    ) {
-      return true
-    }
-    --lineNum
-  }
-  return false
-}
-
-export function checkDefineVariableOpen(
-  document: vscode.TextDocument,
-  position: vscode.Position
-) {
-  var lineNum = position.line
-  while (lineNum !== 0) {
-    const triggerText = document.lineAt(lineNum).text
-    if (
-      triggerText.includes('<dfdl:defineVariable') &&
-      !triggerText.includes('</dfdl:defineVariable') &&
-      !triggerText.includes('/>')
-    ) {
-      return true
-    }
-    --lineNum
-  }
-  return false
+  return ['none', 0, 0]
 }
 
-export function checkSetVariableOpen(
+export function checkTagOpen(
   document: vscode.TextDocument,
-  position: vscode.Position
+  position: vscode.Position,
+  nsPrefix: string,
+  tag: string
 ) {
-  var lineNum = position.line
-  while (lineNum !== 0) {
-    const triggerText = document.lineAt(lineNum).text
+  const triggerLine = position.line
+  const triggerPos = position.character
+  const triggerText = document.lineAt(triggerLine).text
+  const itemsOnLine = getItemsOnLineCount(triggerText)
+  const textBeforeTrigger = triggerText.substring(0, triggerPos)
+  const tagPos = textBeforeTrigger.lastIndexOf('<' + nsPrefix + tag)
+  const tagEndPos = triggerText.indexOf('>', tagPos)
+  const nextTagPos = triggerText.indexOf('<', tagPos + 1)
+  if (tagPos > -1 && itemsOnLine > 1) {
     if (
-      triggerText.includes('<dfdl:setVariable') &&
-      !triggerText.includes('</dfdl:setVariable') &&
-      !triggerText.includes('/>')
+      triggerPos > tagPos &&
+      ((triggerPos <= tagEndPos &&
+        (nextTagPos > tagEndPos || nextTagPos === -1)) ||
+        tagEndPos === -1)
     ) {
       return true
     }
-    --lineNum
+  }
+  if (tagPos > -1 && itemsOnLine < 2) {
+    if (triggerPos > tagPos && (triggerPos <= tagEndPos || tagEndPos === -1)) {
+      return true
+    }
   }
   return false
 }
@@ -287,8 +498,8 @@ export function getXsdNsPrefix(
   document: vscode.TextDocument,
   position: vscode.Position
 ) {
-  var initialLineNum = position.line
-  var lineNum = 0
+  let initialLineNum = position.line
+  let lineNum = 0
   while (initialLineNum !== 0 && lineNum <= initialLineNum) {
     const lineText = document.lineAt(lineNum).text
     // returns either empty prefix value or a prefix plus a colon
@@ -302,20 +513,54 @@ export function getXsdNsPrefix(
   return defaultXsdNsPrefix + ':'
 }
 
+export function getItemsOnLineCount(triggerText: String) {
+  let itemsOnLine = 0
+  let nextPos = 0
+  let result = 0
+  if (triggerText.includes('schema')) {
+    itemsOnLine = 1
+    return itemsOnLine
+  }
+  while (result != -1 && triggerText.includes('<')) {
+    result = triggerText.indexOf('<', nextPos)
+    if (result > -1) {
+      let endPos = triggerText.indexOf('>', nextPos)
+      if (endPos === -1) {
+        ++itemsOnLine
+        break
+      }
+      let testForCloseTag = triggerText.substring(nextPos, endPos)
+      if (
+        !testForCloseTag.includes('</') &&
+        !testForCloseTag.includes('<!--') &&
+        !testForCloseTag.includes('-->')
+      ) {
+        ++itemsOnLine
+      }
+      result = nextPos
+      nextPos = endPos + 1
+    }
+  }
+  return itemsOnLine
+}
+
 export function checkBraceOpen(
   document: vscode.TextDocument,
   position: vscode.Position
 ) {
-  var lineNum = position.line
+  let lineNum = position.line
 
   while (lineNum !== 0) {
     const triggerText = document.lineAt(lineNum).text
     //.text.substring(0, document.lineAt(lineNum).range.end.character)
 
+    if (!triggerText.includes('{')) {
+      return false
+    }
     if (
       triggerText.includes('"{') &&
       triggerText.includes('}"') &&
-      triggerText.includes('..') &&
+      (triggerText.includes('..') || triggerText.includes('.')) &&
       !triggerText.includes('}"/') &&
       !triggerText.includes('>')
     ) {
@@ -336,6 +581,13 @@ export function checkBraceOpen(
     ) {
       return true
     }
+    /*if (triggerText.includes('{')) {
+      let continuationTest = triggerText.substring(triggerText.lastIndexOf('{'),
+                 triggerText.indexOf('}'))
+      if(continuationTest.endsWith('/') ) {
+        return true
+      }
+    }*/
     if (
       triggerText.includes('}"') &&
       (triggerText.includes('}"/') ||

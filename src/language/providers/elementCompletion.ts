@@ -16,9 +16,19 @@
  */
 
 import * as vscode from 'vscode'
-import { checkBraceOpen, getXsdNsPrefix } from './utils'
+import {
+  checkBraceOpen,
+  getXsdNsPrefix,
+  nearestOpen,
+  //isBetweenOpenCloseTags,
+  createCompletionItem,
+  getCommonItems,
+  nearestTag,
+  getCloseTag,
+  getItemsOnLineCount,
+} from './utils'
 import { elementCompletion } from './intellisense/elementItems'
-import { createCompletionItem } from './utils'
+//import { elementCompletion } from './intellisense/elementItems'
 
 export function getElementCompletionProvider(dfdlFormatString: string) {
   return vscode.languages.registerCompletionItemProvider('dfdl', {
@@ -32,12 +42,142 @@ export function getElementCompletionProvider(dfdlFormatString: string) {
         console.log('in elementCompletionProvider - brace is showing open')
         return undefined
       }
-      var nsPrefix = getXsdNsPrefix(document, position)
-      var definedVariables = getDefinedVariables(document)
+      let nsPrefix = getXsdNsPrefix(document, position)
+      let triggerLine = position.line
+      let triggerPos = position.character
+      let triggerText = document.lineAt(triggerLine).text
+      let itemsOnLine = getItemsOnLineCount(triggerText)
+      let nearestOpenItem = nearestOpen(document, position)
 
-      // a completion item that inserts its text as snippet,
+      //const triggerChar = document.lineAt(position.line).text.charAt(position.character)
+
+      if (nearestOpenItem.includes('none')) {
+        let definedVariables = getDefinedVariables(document)
+
+        let isBeforeTrigger = true
+        let startLine = triggerLine
+        let startPos = triggerPos
+        //let lineNum = startLine
+        let tagNearestTrigger = 'none'
+        while (isBeforeTrigger) {
+          let [foundTag, foundLine, foundPos] = nearestTag(
+            document,
+            position,
+            nsPrefix,
+            startLine,
+            startPos
+          )
+          startLine = foundLine
+          let [endTag, endTagLine, endTagPos] = getCloseTag(
+            document,
+            position,
+            nsPrefix,
+            foundTag,
+            foundLine,
+            foundPos
+          )
+          if (itemsOnLine > 1) {
+            if (foundTag === endTag && endTagPos >= triggerPos) {
+              tagNearestTrigger = foundTag
+              //              if (isBetweenOpenCloseTags(document, position, tagNearestTrigger, lineNum)) {
+              break
+              //              }
+            }
+            if (endTag === 'none') {
+              startLine = foundLine - 1
+            } else {
+              startPos = foundPos - 1
+            }
+          }
+          if (itemsOnLine < 2) {
+            if (foundTag === endTag && endTagLine >= triggerLine) {
+              //lineNum = foundLine
+              tagNearestTrigger = foundTag
+              //              if (isBetweenOpenCloseTags(document, position, tagNearestTrigger, lineNum)) {
+              break
+              //              }
+            }
+            startLine = foundLine - 1
+          }
+        }
+
+        if (tagNearestTrigger === 'element') {
+          return getElementCompletionItems(
+            [
+              'complexType',
+              'simpleType',
+              'annotation',
+              'appinfo',
+              'dfdl:discriminator',
+              'dfdl:assert',
+            ],
+            '',
+            definedVariables,
+            nsPrefix
+          )
+        }
+
+        if (tagNearestTrigger === 'sequence') {
+          return getElementCompletionItems(
+            [
+              'element',
+              'sequence',
+              'choice',
+              'annotation',
+              'appinfo',
+              'dfdl:discriminator',
+              'dfdl:assert',
+            ],
+            '',
+            '',
+            nsPrefix
+          )
+        }
+
+        if (tagNearestTrigger === 'choice') {
+          return getElementCompletionItems(
+            ['element', 'group ref'],
+            '',
+            '',
+            nsPrefix
+          )
+        }
+
+        if (tagNearestTrigger === 'group') {
+          return getElementCompletionItems(['sequence'], '', '', nsPrefix)
+        }
+
+        if (tagNearestTrigger === 'complexType') {
+          return getElementCompletionItems(['sequence'], '', '', nsPrefix)
+        }
+
+        if (tagNearestTrigger === 'simpleType') {
+          return getElementCompletionItems(['restriction'], '', '', nsPrefix)
+        }
+
+        if (tagNearestTrigger === 'schema') {
+          return getElementCompletionItems(
+            [
+              'element',
+              'group',
+              'complexType',
+              'simpleType',
+              'annotation',
+              'appinfo',
+              'dfdl:defineVariable',
+              'dfdl:setVariable',
+            ],
+            '',
+            '',
+            nsPrefix
+          )
+        }
+      }
+
+      /*      // a completion item that inserts its text as snippet,
       // the `insertText`-property is a `SnippetString` which will be
       // honored by the editor.
+      
       let compItems: vscode.CompletionItem[] = []
 
       elementCompletion(
@@ -45,35 +185,63 @@ export function getElementCompletionProvider(dfdlFormatString: string) {
         dfdlFormatString,
         nsPrefix
       ).items.forEach((e) => {
-        const line = document
-          .lineAt(position)
-          .text.substring(0, position.character)
+        const completionItem = new vscode.CompletionItem(e.item)
+        completionItem.insertText = new vscode.SnippetString(e.snippetString)
 
-        if (line.includes('<') && e.snippetString.startsWith('<')) {
-          e.snippetString = e.snippetString.substring(1, e.snippetString.length)
+        if (e.markdownString) {
+          completionItem.documentation = new vscode.MarkdownString(
+            e.markdownString
+          )
         }
-
-        compItems.push(createCompletionItem(e, '', nsPrefix))
+        compItems.push(completionItem)
       })
-
       return compItems
+      */
     },
   })
 }
 
+function getElementCompletionItems(
+  itemsToUse: string[],
+  preVal: string = '',
+  definedVariables: string = '',
+  nsPrefix: string
+) {
+  let compItems: vscode.CompletionItem[] = getCommonItems(
+    itemsToUse,
+    preVal,
+    definedVariables,
+    nsPrefix
+  )
+  let dfdlFormatString: string = ''
+
+  elementCompletion(definedVariables, dfdlFormatString, nsPrefix).items.forEach(
+    (e) => {
+      for (let i = 0; i < itemsToUse.length; ++i) {
+        if (e.item.includes(itemsToUse[i])) {
+          const completionItem = createCompletionItem(e, preVal, nsPrefix)
+          compItems.push(completionItem)
+        }
+      }
+    }
+  )
+
+  return compItems
+}
+
 function getDefinedVariables(document: vscode.TextDocument) {
-  var additionalTypes = ''
-  var lineNum = 0
-  var itemCnt = 0
+  let additionalTypes = ''
+  let lineNum = 0
+  let itemCnt = 0
   const lineCount = document.lineCount
   while (lineNum !== lineCount) {
     const triggerText = document
       .lineAt(lineNum)
       .text.substring(0, document.lineAt(lineNum).range.end.character)
     if (triggerText.includes('dfdl:defineVariable name=')) {
-      var startPos = triggerText.indexOf('"', 0)
-      var endPos = triggerText.indexOf('"', startPos + 1)
-      var newType = triggerText.substring(startPos + 1, endPos)
+      let startPos = triggerText.indexOf('"', 0)
+      let endPos = triggerText.indexOf('"', startPos + 1)
+      let newType = triggerText.substring(startPos + 1, endPos)
       if (itemCnt === 0) {
         additionalTypes = newType
         ++itemCnt
@@ -86,3 +254,6 @@ function getDefinedVariables(document: vscode.TextDocument) {
   }
   return additionalTypes
 }
+/*function getCompletionItems(arg0: string[], nsPrefix: string): vscode.ProviderResult<vscode.CompletionItem[] | vscode.CompletionList<vscode.CompletionItem>> {
+  throw new Error('Function not implemented.')
+}*/
